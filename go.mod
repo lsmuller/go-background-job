@@ -4,6 +4,7 @@ go 1.15
 
 require (
 	github.com/garyburd/redigo v1.6.2 // indirect
+	github.com/golang/mock v1.6.0
 	github.com/sirupsen/logrus v1.8.1
 	github.com/topfreegames/go-workers v1.0.1
 	github.com/topfreegames/pitaya v1.1.9
