@@ -1,0 +1,23 @@
+---
+app:
+  stack: "production"
+  logging:
+    verbose: 2
+    logJSON: true
+
+worker:
+  retry:
+    enabled: true
+    maxDelay: 4
+    minDelay: 50
+    retryMax: 1
+  redis:
+    url: localhost:9001
+    pool: 10
+  jobs:
+    bitcoinPriceIndexFetcher:
+      enabled: true
+      concurrency: 3
+      period: "5s"
+      metadata:
+        apiUrl: https://api.coindesk.com/v1/bpi/currentprice.json
