@@ -1,9 +1,6 @@
-This projects enables quickly creation of periodic background jobs.
+This projects enables quickly creation of periodic background jobs. They are background tasks executed by the server. These processes run behind the scenes and without the user's intervention. Typical tasks for these processes include logging, system monitoring, scheduling, and user notification.
 
-
-Either way, worker stands for background jobs executed by the server. These processes run behind the scenes and without the player's intervention. Typical tasks for these processes include logging, system monitoring, scheduling, and user notification.
-
-At this point of the lifecycle of the game, for whatever we code we should think about scaling. Millions of players use this game and a huge amount of data flows within what we code. With that in mind, we have chosen to work with the package [go-workers](https://github.com/topfreegames/go-workers). It uses queues in [Redis](https://redis.io/) to trigger workers, which doesn't encumber our server with such memory and processing.
+I have chosen to work with the package [go-workers](https://github.com/topfreegames/go-workers). It uses queues in [Redis](https://redis.io/) to trigger workers, which doesn't encumber our server with such memory and processing.
 
 ### Step by step to create a worker
 
@@ -16,6 +13,7 @@ type BitcoinPriceIndexFetcherWorker struct {
 	queueConfig *redis.QueueConfig
 	worker      redis.WorkerInterface
 	apiUrl      string
+	client      restclient.HTTPClient
 	isRunning   bool
 }
 
@@ -23,11 +21,13 @@ func NewBitcoinPriceIndexFetcherWorker(
 	queueConfig *redis.QueueConfig,
 	worker redis.WorkerInterface,
 	logger logrus.FieldLogger,
+	client restclient.HTTPClient,
 ) *BitcoinPriceIndexFetcherWorker {
 	return &BitcoinPriceIndexFetcherWorker{
 		logger:      logger,
 		queueConfig: queueConfig,
 		worker:      worker,
+		client:      client,
 	}
 }
 ```
@@ -98,17 +98,31 @@ type BitcoinPriceIndexData struct {
 	} `json:"bpi"`
 }
 
-func (b *BitcoinPriceIndexFetcherWorker) fetchBitcoinPriceIndex(jobArg *redisWorker.Msg) {
+func (b *BitcoinPriceIndexFetcherWorker) FetchBitcoinPriceIndex(jobArg *redisWorker.Msg) {
 	logger := b.logger.WithFields(logrus.Fields{
 		"method": "fetchBitcoinPriceIndex",
 	})
 
-	resp, err := http.Get(b.apiUrl)
+	resp, err := b.client.Get(b.apiUrl)
 	if err != nil {
 		logger.Error(err)
 	}
 
-	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		panic(errors.New("The external API returned an unexpected status code " + strconv.Itoa(resp.StatusCode)))
+	}
+
+	if resp.Body == nil {
+		logger.Warn("Response has no body")
+		return
+	}
+
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+
+		}
+	}(resp.Body)
 
 	jsonDataFromHttp, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
@@ -116,7 +130,6 @@ func (b *BitcoinPriceIndexFetcherWorker) fetchBitcoinPriceIndex(jobArg *redisWor
 	}
 
 	var data *BitcoinPriceIndexData
-
 	err = json.Unmarshal(jsonDataFromHttp, &data)
 
 	logger.Info("On " + data.Time.Updated + " Bitcoin value is worth " + data.Bpi.USD.Rate + " " + data.Bpi.USD.Code)
@@ -136,7 +149,7 @@ const (
 - Use the register method to assign the job you created with the queue. By doing so, whenever there's a new message at the queue, it will be forwarded to the assign method that will know how to parse it and process it.
 ```
 func (b *BitcoinPriceIndexFetcherWorker) register(concurrency int) {
-	b.worker.Register(constants.BitcoinPriceIndexFetcher, concurrency, b.fetchBitcoinPriceIndex)
+	b.worker.Register(constants.BitcoinPriceIndexFetcher, concurrency, b.FetchBitcoinPriceIndex)
 }
 ```
 
@@ -169,7 +182,7 @@ func (b *BitcoinPriceIndexFetcherWorker) scheduler(period time.Duration) {
 }
 ```
 
-7. Start the worker in `main.go` (start of the application).
+**7. Start the worker in `main.go` (start of the application).**
 ```
 cfg := config.GetConfig()
 logger := logging.CreateLogger(cfg.App.Logging)
@@ -182,13 +195,15 @@ worker.Setup()
 
 queueConfig := redisWorker.NewQueueConfig(cfg.Worker)
 
-bitcoinPriceIndexFetcher := serverWorker.NewBitcoinPriceIndexFetcherWorker(queueConfig, worker, logger)
+restClient := restclient.NewRestClient(logger)
+
+bitcoinPriceIndexFetcher := serverWorker.NewBitcoinPriceIndexFetcherWorker(queueConfig, worker, logger, restClient)
 bitcoinPriceIndexFetcher.Start(cfg.Worker)
 
 worker.Start()
 ```
 
-Testing
+### Testing
 ```bash
 #Setup project dependencies
 make deps
@@ -199,8 +214,13 @@ make run
 #CTRL C / COMMAND C to stop
 ```
 
-Output
+_Output_
 ```
 {"file":"~/go/src/github.com/lsmuller/go-background-jobs/worker/bitcoin_price_fetcher.go:109","func":"github.com/lsmuller/go-background-jobs/worker.(*BitcoinPriceIndexFetcherWorker).fetchBitcoinPriceIndex","level":"info","method":"fetchBitcoinPriceIndex","msg":"On Sep 14, 2021 01:13:00 UTC Bitcoin value is worth 45,209.7524 USD","time":"2021-09-13T22:13:48-03:00"}
 {"file":"~/go/src/github.com/lsmuller/go-background-jobs/worker/bitcoin_price_fetcher.go:110","func":"github.com/lsmuller/go-background-jobs/worker.(*BitcoinPriceIndexFetcherWorker).fetchBitcoinPriceIndex","level":"warning","method":"fetchBitcoinPriceIndex","msg":"This data was produced from the CoinDesk Bitcoin Price Index (USD). Non-USD currency data converted using hourly conversion rate from openexchangerates.org","time":"2021-09-13T22:13:48-03:00"}
+```
+
+### Run unit tests
+```bash
+make unit
 ```
